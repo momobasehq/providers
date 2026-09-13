@@ -14,15 +14,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	mb "github.com/momobasehq/momobase/providers"
 	"github.com/momobasehq/providers/internal/configx"
 	"github.com/momobasehq/providers/internal/httpx"
 	"github.com/momobasehq/providers/internal/msisdn"
+	"github.com/momobasehq/providers/internal/textx"
 	"github.com/momobasehq/providers/internal/token"
-	"github.com/momobasehq/providers/internal/uuidx"
 )
 
 const (
@@ -41,8 +41,9 @@ type state struct {
 	caps          []mb.Capability
 }
 
+// Provider is initialized once by the Momobase runtime before first use;
+// Init is not safe to call concurrently with the payment methods.
 type Provider struct {
-	mu     sync.RWMutex
 	s      state
 	client *http.Client
 	tokens token.Cache
@@ -54,7 +55,7 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 	if err := configx.Require(c, "client_id", "client_secret", "webhook_secret"); err != nil {
 		return fmt.Errorf("flutterwave: %w", err)
 	}
-	base := configx.String(c, "base_url")
+	base := mb.ConfigString(c, "base_url")
 	if base == "" {
 		if configx.Environment(c) == "production" {
 			base = liveURL
@@ -62,34 +63,22 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 			base = sandboxURL
 		}
 	}
-	p.mu.Lock()
 	p.s = state{
 		baseURL:       strings.TrimRight(base, "/"),
-		clientID:      configx.String(c, "client_id"),
-		clientSecret:  configx.String(c, "client_secret"),
-		redirectURL:   configx.String(c, "redirect_url"),
-		callbackURL:   configx.String(c, "callback_url"),
-		webhookSecret: configx.String(c, "webhook_secret"),
+		clientID:      mb.ConfigString(c, "client_id"),
+		clientSecret:  mb.ConfigString(c, "client_secret"),
+		redirectURL:   mb.ConfigString(c, "redirect_url"),
+		callbackURL:   mb.ConfigString(c, "callback_url"),
+		webhookSecret: mb.ConfigString(c, "webhook_secret"),
 		caps: []mb.Capability{
 			{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo},
 			{ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo},
 		},
 	}
-	p.mu.Unlock()
-	p.tokens.Reset()
 	return nil
 }
 
-func (p *Provider) snapshot() state {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.s
-}
-
-func (p *Provider) Capabilities() []mb.Capability {
-	s := p.snapshot()
-	return append([]mb.Capability(nil), s.caps...)
-}
+func (p *Provider) Capabilities() []mb.Capability { return p.s.caps }
 
 func (p *Provider) ValidateRequest(_ context.Context, r *mb.PaymentRequest) error {
 	if r.PaymentMethod != mb.PaymentMethodMomo {
@@ -117,7 +106,7 @@ type tokenResponse struct {
 }
 
 func (p *Provider) accessToken(ctx context.Context) (string, error) {
-	s := p.snapshot()
+	s := p.s
 	return p.tokens.Get(ctx, func(ctx context.Context) (string, time.Duration, error) {
 		var out tokenResponse
 		err := httpx.Form(ctx, p.client, http.MethodPost, tokenURL, nil, url.Values{
@@ -135,21 +124,13 @@ func (p *Provider) accessToken(ctx context.Context) (string, error) {
 	})
 }
 
-func requestHeaders(accessToken string) (map[string]string, error) {
-	trace, err := uuidx.New()
-	if err != nil {
-		return nil, err
-	}
-	idem, err := uuidx.New()
-	if err != nil {
-		return nil, err
-	}
+func requestHeaders(accessToken string) map[string]string {
 	return map[string]string{
 		"Authorization":     "Bearer " + accessToken,
 		"Accept":            "application/json",
-		"X-Trace-Id":        trace,
-		"X-Idempotency-Key": idem,
-	}, nil
+		"X-Trace-Id":        uuid.NewString(),
+		"X-Idempotency-Key": uuid.NewString(),
+	}
 }
 
 type apiResponse[T any] struct {
@@ -159,11 +140,8 @@ type apiResponse[T any] struct {
 	Error   any    `json:"error"`
 }
 
-type customerData struct {
-	ID string `json:"id"`
-}
-
-type paymentMethodData struct {
+// idData is the id-only payload returned by the customer and payment-method endpoints.
+type idData struct {
 	ID string `json:"id"`
 }
 
@@ -187,30 +165,19 @@ type transferData struct {
 	} `json:"amount"`
 }
 
-func (p *Provider) post(ctx context.Context, endpoint string, token string, in, out any) error {
-	headers, err := requestHeaders(token)
-	if err != nil {
-		return err
-	}
-	if err := httpx.JSON(ctx, p.client, http.MethodPost, endpoint, headers, in, out); err != nil {
-		return err
-	}
-	return nil
+func (p *Provider) post(ctx context.Context, endpoint, token string, in, out any) error {
+	return httpx.JSON(ctx, p.client, http.MethodPost, endpoint, requestHeaders(token), in, out)
 }
 
-func (p *Provider) get(ctx context.Context, endpoint string, token string, out any) error {
-	headers, err := requestHeaders(token)
-	if err != nil {
-		return err
-	}
-	return httpx.JSON(ctx, p.client, http.MethodGet, endpoint, headers, nil, out)
+func (p *Provider) get(ctx context.Context, endpoint, token string, out any) error {
+	return httpx.JSON(ctx, p.client, http.MethodGet, endpoint, requestHeaders(token), nil, out)
 }
 
 func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
 	if strings.TrimSpace(r.Email) == "" {
 		return nil, fmt.Errorf("flutterwave: email is required for mobile-money collection")
 	}
-	s := p.snapshot()
+	s := p.s
 	tok, err := p.accessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -228,12 +195,12 @@ func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.Provid
 		"phone": map[string]string{"country_code": cc, "number": local},
 		"meta":  r.Metadata,
 	}
-	var customer apiResponse[customerData]
+	var customer apiResponse[idData]
 	if err := p.post(ctx, s.baseURL+"/customers", tok, customerReq, &customer); err != nil {
 		return nil, fmt.Errorf("flutterwave create customer: %w", err)
 	}
 	if customer.Data.ID == "" {
-		return nil, fmt.Errorf("flutterwave create customer: %s", configx.First(customer.Message, "missing customer ID"))
+		return nil, fmt.Errorf("flutterwave create customer: %s", mb.First(customer.Message, "missing customer ID"))
 	}
 
 	paymentReq := map[string]any{
@@ -244,12 +211,12 @@ func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.Provid
 			"phone_number": local,
 		},
 	}
-	var paymentMethod apiResponse[paymentMethodData]
+	var paymentMethod apiResponse[idData]
 	if err := p.post(ctx, s.baseURL+"/payment-methods", tok, paymentReq, &paymentMethod); err != nil {
 		return nil, fmt.Errorf("flutterwave create payment method: %w", err)
 	}
 	if paymentMethod.Data.ID == "" {
-		return nil, fmt.Errorf("flutterwave create payment method: %s", configx.First(paymentMethod.Message, "missing payment-method ID"))
+		return nil, fmt.Errorf("flutterwave create payment method: %s", mb.First(paymentMethod.Message, "missing payment-method ID"))
 	}
 
 	chargeReq := map[string]any{
@@ -271,12 +238,12 @@ func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.Provid
 		return nil, fmt.Errorf("flutterwave create charge: %w", err)
 	}
 	if charge.Data.ID == "" {
-		return nil, fmt.Errorf("flutterwave create charge: %s", configx.First(charge.Message, "missing charge ID"))
+		return nil, fmt.Errorf("flutterwave create charge: %s", mb.First(charge.Message, "missing charge ID"))
 	}
 	return &mb.ProviderPaymentResponse{
 		ProviderReference: charge.Data.ID,
 		Status:            flutterwaveStatus(charge.Data.Status),
-		Message:           configx.First(charge.Message, charge.Data.Status),
+		Message:           mb.First(charge.Message, charge.Data.Status),
 		Raw: map[string]any{
 			"customer":       httpx.Map(customer),
 			"payment_method": httpx.Map(paymentMethod),
@@ -286,7 +253,7 @@ func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.Provid
 }
 
 func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
-	s := p.snapshot()
+	s := p.s
 	tok, err := p.accessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -296,7 +263,7 @@ func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.Provi
 		"action":    "instant",
 		"type":      "mobile_money",
 		"reference": reference,
-		"narration": truncate(configx.First(r.Description, r.Reference, "Momobase payout"), 180),
+		"narration": textx.Trim(mb.First(r.Description, r.Reference, "Momobase payout"), 180),
 		"payment_instruction": map[string]any{
 			"source_currency":      strings.ToUpper(r.Currency),
 			"destination_currency": strings.ToUpper(r.Currency),
@@ -305,7 +272,7 @@ func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.Provi
 				"value":      amountNumber(r.Amount, r.Currency),
 			},
 			"recipient": map[string]any{
-				"name": configx.First(r.Name, "Momobase recipient"),
+				"name": mb.First(r.Name, "Momobase recipient"),
 				"mobile_money": map[string]string{
 					"network": r.Scheme,
 					"msisdn":  strings.TrimPrefix(r.Account, "+"),
@@ -321,18 +288,18 @@ func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.Provi
 		return nil, fmt.Errorf("flutterwave create mobile-money transfer: %w", err)
 	}
 	if out.Data.ID == "" {
-		return nil, fmt.Errorf("flutterwave create mobile-money transfer: %s", configx.First(out.Message, "missing transfer ID"))
+		return nil, fmt.Errorf("flutterwave create mobile-money transfer: %s", mb.First(out.Message, "missing transfer ID"))
 	}
 	return &mb.ProviderPaymentResponse{
 		ProviderReference: out.Data.ID,
 		Status:            flutterwaveStatus(out.Data.Status),
-		Message:           configx.First(out.Message, out.Data.Status),
+		Message:           mb.First(out.Message, out.Data.Status),
 		Raw:               httpx.Map(out),
 	}, nil
 }
 
 func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.ProviderTransactionStatus, error) {
-	s := p.snapshot()
+	s := p.s
 	tok, err := p.accessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -354,7 +321,7 @@ func (p *Provider) queryCharge(ctx context.Context, s state, tok, ref string) (*
 	if err := p.get(ctx, s.baseURL+"/charges/"+url.PathEscape(ref), tok, &out); err != nil {
 		return nil, fmt.Errorf("flutterwave query charge: %w", err)
 	}
-	return &mb.ProviderTransactionStatus{ProviderReference: configx.First(out.Data.ID, ref), Status: flutterwaveStatus(out.Data.Status), Message: configx.First(out.Message, out.Data.Status)}, nil
+	return &mb.ProviderTransactionStatus{ProviderReference: mb.First(out.Data.ID, ref), Status: flutterwaveStatus(out.Data.Status), Message: mb.First(out.Message, out.Data.Status)}, nil
 }
 
 func (p *Provider) queryTransfer(ctx context.Context, s state, tok, ref string) (*mb.ProviderTransactionStatus, error) {
@@ -362,7 +329,7 @@ func (p *Provider) queryTransfer(ctx context.Context, s state, tok, ref string) 
 	if err := p.get(ctx, s.baseURL+"/transfers/"+url.PathEscape(ref), tok, &out); err != nil {
 		return nil, fmt.Errorf("flutterwave query transfer: %w", err)
 	}
-	return &mb.ProviderTransactionStatus{ProviderReference: configx.First(out.Data.ID, ref), Status: flutterwaveStatus(out.Data.Status), Message: configx.First(out.Message, out.Data.Status)}, nil
+	return &mb.ProviderTransactionStatus{ProviderReference: mb.First(out.Data.ID, ref), Status: flutterwaveStatus(out.Data.Status), Message: mb.First(out.Message, out.Data.Status)}, nil
 }
 
 func (p *Provider) HealthCheck(ctx context.Context) error {
@@ -371,7 +338,7 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 }
 
 func (p *Provider) VerifyWebhook(_ context.Context, body []byte, headers map[string]string) (*mb.ProviderWebhookEvent, error) {
-	s := p.snapshot()
+	s := p.s
 	sig := httpx.Header(headers, "flutterwave-signature")
 	if sig == "" {
 		return nil, fmt.Errorf("flutterwave: missing flutterwave-signature header")
@@ -397,10 +364,10 @@ func (p *Provider) VerifyWebhook(_ context.Context, body []byte, headers map[str
 	if providerRef == "" {
 		return nil, fmt.Errorf("flutterwave: webhook is missing transaction id")
 	}
-	currency := configx.First(stringValue(data["currency"]), stringValue(data["destination_currency"]), stringValue(data["source_currency"]))
-	amountText := numberValue(data["amount"])
+	currency := mb.First(stringValue(data["currency"]), stringValue(data["destination_currency"]), stringValue(data["source_currency"]))
+	amountText := stringValue(data["amount"])
 	if m, ok := data["amount"].(map[string]any); ok {
-		amountText = numberValue(m["value"])
+		amountText = stringValue(m["value"])
 	}
 	var minor *int64
 	if amountText != "" && currency != "" {
@@ -412,7 +379,7 @@ func (p *Provider) VerifyWebhook(_ context.Context, body []byte, headers map[str
 	return &mb.ProviderWebhookEvent{
 		ProviderReference: providerRef,
 		Status:            flutterwaveStatus(stringValue(data["status"])),
-		EventType:         configx.First(stringValue(payload["type"]), stringValue(payload["event"])),
+		EventType:         mb.First(stringValue(payload["type"]), stringValue(payload["event"])),
 		ExternalReference: stringValue(data["reference"]),
 		Amount:            minor,
 		Currency:          currency,
@@ -447,40 +414,31 @@ func webhookAccount(data map[string]any) string {
 
 func flutterwaveStatus(v string) string {
 	switch strings.ToUpper(strings.TrimSpace(v)) {
-	case "SUCCESS", "SUCCESSFUL", "SUCCEEDED", "COMPLETED":
-		return mb.TxSucceeded
-	case "PROCESSING", "IN_PROGRESS":
-		return mb.TxProcessing
+	case "":
+		return mb.TxUnknown
 	case "PENDING", "NEW", "QUEUED":
 		return mb.TxPending
-	case "FAILED", "FAILURE", "ERROR":
+	case "ERROR":
 		return mb.TxFailed
-	case "CANCELLED", "CANCELED", "REVERSED":
+	case "REVERSED":
 		return mb.TxCancelled
-	case "EXPIRED":
-		return mb.TxExpired
 	default:
-		return mb.TxUnknown
+		return mb.PaymentStatus(v)
 	}
 }
 
 func flutterwaveReference(s string) string {
-	s = strings.TrimSpace(s)
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
+	s = strings.Map(func(r rune) rune {
+		if r == '-' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			return r
 		}
-	}
-	s = b.String()
+		return -1
+	}, strings.TrimSpace(s))
 	if len(s) > 42 {
 		s = s[:42]
 	}
 	if len(s) < 6 {
 		s += "-momobase"
-		if len(s) > 42 {
-			s = s[:42]
-		}
 	}
 	return s
 }
@@ -496,25 +454,6 @@ func amountNumber(minor int64, currency string) any {
 		return n
 	}
 	return text
-}
-
-func numberValue(v any) string {
-	switch n := v.(type) {
-	case json.Number:
-		return n.String()
-	case float64:
-		return strconv.FormatFloat(n, 'f', -1, 64)
-	case float32:
-		return strconv.FormatFloat(float64(n), 'f', -1, 64)
-	case int:
-		return strconv.Itoa(n)
-	case int64:
-		return strconv.FormatInt(n, 10)
-	case string:
-		return n
-	default:
-		return ""
-	}
 }
 
 func stringValue(v any) string {
@@ -541,15 +480,6 @@ func splitName(name string) (first, last string) {
 	return parts[0], strings.Join(parts[1:], " ")
 }
 
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
-}
-
-var _ mb.PaymentProvider = (*Provider)(nil)
 var _ mb.Collector = (*Provider)(nil)
 var _ mb.Disburser = (*Provider)(nil)
 var _ mb.TransactionQuerier = (*Provider)(nil)

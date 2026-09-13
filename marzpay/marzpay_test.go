@@ -29,3 +29,13 @@ func TestVerifyWebhook(t *testing.T) {
 		t.Fatalf("unexpected event: %#v", event)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	if marzStatus("pending") != mb.TxPending || marzStatus("sandbox") != mb.TxPending {
+		t.Fatal("MarzPay status override failed")
+	}
+	// Vocabularies delegated to mb.PaymentStatus.
+	if marzStatus("completed") != mb.TxSucceeded || marzStatus("processing") != mb.TxProcessing || marzStatus("failed") != mb.TxFailed || marzStatus("cancelled") != mb.TxCancelled {
+		t.Fatal("MarzPay status delegation failed")
+	}
+}

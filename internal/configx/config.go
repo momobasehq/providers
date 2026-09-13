@@ -7,23 +7,21 @@ import (
 	mb "github.com/momobasehq/momobase/providers"
 )
 
-func String(c mb.ProviderConfig, key string) string { return mb.ConfigString(c, key) }
-
+// Require reports the first of keys that is missing from c.
 func Require(c mb.ProviderConfig, keys ...string) error {
 	for _, key := range keys {
-		if String(c, key) == "" {
+		if mb.ConfigString(c, key) == "" {
 			return fmt.Errorf("missing provider config %q", key)
 		}
 	}
 	return nil
 }
 
+// Environment returns the configured environment, defaulting to sandbox.
 func Environment(c mb.ProviderConfig) string {
-	env := strings.ToLower(String(c, "environment"))
+	env := strings.ToLower(mb.ConfigString(c, "environment"))
 	if env == "" {
 		return "sandbox"
 	}
 	return env
 }
-
-func First(values ...string) string { return mb.First(values...) }

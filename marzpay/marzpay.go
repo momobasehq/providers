@@ -13,13 +13,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
+	"github.com/google/uuid"
 	mb "github.com/momobasehq/momobase/providers"
 	"github.com/momobasehq/providers/internal/configx"
 	"github.com/momobasehq/providers/internal/httpx"
 	"github.com/momobasehq/providers/internal/msisdn"
-	"github.com/momobasehq/providers/internal/uuidx"
+	"github.com/momobasehq/providers/internal/textx"
 )
 
 const liveURL = "https://wallet.wearemarz.com/api/v1"
@@ -28,8 +28,10 @@ type state struct {
 	baseURL, apiKey, apiSecret, callbackURL, webhookSecret string
 	caps                                                   []mb.Capability
 }
+
+// Provider is initialized once by the Momobase runtime before first use;
+// Init is not safe to call concurrently with the payment methods.
 type Provider struct {
-	mu     sync.RWMutex
 	s      state
 	client *http.Client
 }
@@ -39,24 +41,18 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 	if err := configx.Require(c, "api_key", "api_secret"); err != nil {
 		return fmt.Errorf("marzpay: %w", err)
 	}
-	base := configx.String(c, "base_url")
+	base := mb.ConfigString(c, "base_url")
 	if base == "" {
 		base = liveURL
 	}
-	s := state{baseURL: strings.TrimRight(base, "/"), apiKey: configx.String(c, "api_key"), apiSecret: configx.String(c, "api_secret"), callbackURL: configx.String(c, "callback_url"), webhookSecret: configx.String(c, "webhook_signing_secret"), caps: []mb.Capability{{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo}, {ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodCard}, {ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo}}}
+	s := state{baseURL: strings.TrimRight(base, "/"), apiKey: mb.ConfigString(c, "api_key"), apiSecret: mb.ConfigString(c, "api_secret"), callbackURL: mb.ConfigString(c, "callback_url"), webhookSecret: mb.ConfigString(c, "webhook_signing_secret"), caps: []mb.Capability{{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo}, {ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodCard}, {ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo}}}
 	if s.callbackURL != "" && s.webhookSecret == "" {
 		return fmt.Errorf("marzpay: webhook_signing_secret is required when callback_url is set")
 	}
-	p.mu.Lock()
 	p.s = s
-	p.mu.Unlock()
 	return nil
 }
-func (p *Provider) snapshot() state { p.mu.RLock(); defer p.mu.RUnlock(); return p.s }
-func (p *Provider) Capabilities() []mb.Capability {
-	s := p.snapshot()
-	return append([]mb.Capability(nil), s.caps...)
-}
+func (p *Provider) Capabilities() []mb.Capability { return p.s.caps }
 func (p *Provider) ValidateRequest(_ context.Context, r *mb.PaymentRequest) error {
 	switch r.PaymentMethod {
 	case mb.PaymentMethodMomo:
@@ -91,13 +87,10 @@ type createResponse struct {
 }
 
 func (p *Provider) pay(ctx context.Context, r mb.PaymentRequest, path string) (*mb.ProviderPaymentResponse, error) {
-	s := p.snapshot()
-	ref, err := uuidx.New()
-	if err != nil {
-		return nil, err
-	}
+	s := p.s
+	ref := uuid.NewString()
 	meta, _ := json.Marshal([]map[string]any{{"momobaseTransactionId": r.TransactionID}, {"applicationReference": r.Reference}})
-	fields := map[string]string{"amount": mb.FormatAmountMinor(r.Amount, r.Currency), "country": strings.ToUpper(r.Country), "currency": strings.ToUpper(r.Currency), "reference": ref, "description": trim(configx.First(r.Description, r.Reference, "Momobase payment"), 255), "metadata": string(meta)}
+	fields := map[string]string{"amount": mb.FormatAmountMinor(r.Amount, r.Currency), "country": strings.ToUpper(r.Country), "currency": strings.ToUpper(r.Currency), "reference": ref, "description": textx.Trim(mb.First(r.Description, r.Reference, "Momobase payment"), 255), "metadata": string(meta)}
 	if r.PaymentMethod == mb.PaymentMethodMomo {
 		fields["phone_number"] = r.Account
 	} else if r.PaymentMethod == mb.PaymentMethodCard && path == "/collect-money" {
@@ -107,13 +100,13 @@ func (p *Provider) pay(ctx context.Context, r mb.PaymentRequest, path string) (*
 		fields["callback_url"] = s.callbackURL
 	}
 	var out createResponse
-	if err = httpx.Multipart(ctx, p.client, s.baseURL+path, auth(s), fields, &out); err != nil {
+	if err := httpx.Multipart(ctx, p.client, s.baseURL+path, auth(s), fields, &out); err != nil {
 		return nil, err
 	}
 	if out.Data.Transaction.UUID == "" {
-		return nil, fmt.Errorf("marzpay: %s", configx.First(out.Message, "missing transaction UUID"))
+		return nil, fmt.Errorf("marzpay: %s", mb.First(out.Message, "missing transaction UUID"))
 	}
-	return &mb.ProviderPaymentResponse{ProviderReference: out.Data.Transaction.UUID, Status: marzStatus(out.Data.Transaction.Status), Message: configx.First(out.Message, out.Data.Transaction.Status), Raw: httpx.Map(out)}, nil
+	return &mb.ProviderPaymentResponse{ProviderReference: out.Data.Transaction.UUID, Status: marzStatus(out.Data.Transaction.Status), Message: mb.First(out.Message, out.Data.Transaction.Status), Raw: httpx.Map(out)}, nil
 }
 func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
 	return p.pay(ctx, r, "/collect-money")
@@ -163,7 +156,7 @@ func decodeWebhook(body []byte) (webhook, map[string]any, error) {
 	return w, raw, nil
 }
 func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.ProviderTransactionStatus, error) {
-	s := p.snapshot()
+	s := p.s
 	b, err := httpx.Do(ctx, p.client, http.MethodGet, s.baseURL+"/transactions/"+ref, auth(s), "", nil)
 	if err != nil {
 		return nil, err
@@ -172,10 +165,10 @@ func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.Pro
 	if err != nil {
 		return nil, err
 	}
-	return &mb.ProviderTransactionStatus{ProviderReference: configx.First(w.Transaction.UUID, ref), Status: marzStatus(w.Transaction.Status), Message: configx.First(w.EventType, w.Transaction.Status)}, nil
+	return &mb.ProviderTransactionStatus{ProviderReference: mb.First(w.Transaction.UUID, ref), Status: marzStatus(w.Transaction.Status), Message: mb.First(w.EventType, w.Transaction.Status)}, nil
 }
 func (p *Provider) VerifyWebhook(_ context.Context, body []byte, headers map[string]string) (*mb.ProviderWebhookEvent, error) {
-	s := p.snapshot()
+	s := p.s
 	if s.webhookSecret == "" {
 		return nil, fmt.Errorf("marzpay: webhook signing is not configured")
 	}
@@ -220,29 +213,13 @@ func (p *Provider) VerifyWebhook(_ context.Context, body []byte, headers map[str
 }
 func marzStatus(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "completed", "successful", "success":
-		return mb.TxSucceeded
-	case "processing":
-		return mb.TxProcessing
 	case "pending", "sandbox":
 		return mb.TxPending
-	case "failed":
-		return mb.TxFailed
-	case "cancelled", "canceled":
-		return mb.TxCancelled
 	default:
 		return mb.PaymentStatus(v)
 	}
 }
-func trim(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
-}
 
-var _ mb.PaymentProvider = (*Provider)(nil)
 var _ mb.Collector = (*Provider)(nil)
 var _ mb.Disburser = (*Provider)(nil)
 var _ mb.TransactionQuerier = (*Provider)(nil)

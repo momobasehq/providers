@@ -34,3 +34,13 @@ func TestReferenceBounds(t *testing.T) {
 		t.Fatalf("invalid reference length %d: %q", len(got), got)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	if flutterwaveStatus("") != mb.TxUnknown || flutterwaveStatus("QUEUED") != mb.TxPending || flutterwaveStatus("ERROR") != mb.TxFailed || flutterwaveStatus("REVERSED") != mb.TxCancelled {
+		t.Fatal("Flutterwave status override failed")
+	}
+	// Vocabularies delegated to mb.PaymentStatus.
+	if flutterwaveStatus("SUCCEEDED") != mb.TxSucceeded || flutterwaveStatus("IN_PROGRESS") != mb.TxProcessing || flutterwaveStatus("EXPIRED") != mb.TxExpired || flutterwaveStatus("nonsense") != mb.TxUnknown {
+		t.Fatal("Flutterwave status delegation failed")
+	}
+}

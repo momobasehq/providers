@@ -31,8 +31,10 @@ type state struct {
 	sign                                                                             bool
 	caps                                                                             []mb.Capability
 }
+
+// Provider is initialized once by the Momobase runtime before first use;
+// Init is not safe to call concurrently with the payment methods.
 type Provider struct {
-	mu     sync.RWMutex
 	s      state
 	client *http.Client
 	token  token.Cache
@@ -47,7 +49,7 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 		return fmt.Errorf("airtel: %w", err)
 	}
 	env := configx.Environment(c)
-	base := configx.String(c, "base_url")
+	base := mb.ConfigString(c, "base_url")
 	if base == "" {
 		if env == "production" || env == "live" {
 			base = liveURL
@@ -55,28 +57,18 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 			base = sandboxURL
 		}
 	}
-	s := state{baseURL: strings.TrimRight(base, "/"), clientID: configx.String(c, "client_id"), clientSecret: configx.String(c, "client_secret"), country: strings.ToUpper(configx.String(c, "country")), currency: strings.ToUpper(configx.String(c, "currency")), pin: configx.String(c, "pin"), encryptedPIN: configx.String(c, "encrypted_pin"), publicKey: configx.String(c, "public_key"), sign: mb.ConfigBool(c, "sign_requests")}
+	s := state{baseURL: strings.TrimRight(base, "/"), clientID: mb.ConfigString(c, "client_id"), clientSecret: mb.ConfigString(c, "client_secret"), country: strings.ToUpper(mb.ConfigString(c, "country")), currency: strings.ToUpper(mb.ConfigString(c, "currency")), pin: mb.ConfigString(c, "pin"), encryptedPIN: mb.ConfigString(c, "encrypted_pin"), publicKey: mb.ConfigString(c, "public_key"), sign: mb.ConfigBool(c, "sign_requests")}
 	s.caps = []mb.Capability{{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo}}
 	if s.pin != "" || s.encryptedPIN != "" {
 		s.caps = append(s.caps, mb.Capability{ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo})
 	}
-	p.mu.Lock()
 	p.s = s
-	p.mu.Unlock()
-	p.token.Reset()
-	p.keyMu.Lock()
-	p.key = nil
-	p.keyMu.Unlock()
 	return nil
 }
-func (p *Provider) snapshot() state { p.mu.RLock(); defer p.mu.RUnlock(); return p.s }
-func (p *Provider) Capabilities() []mb.Capability {
-	s := p.snapshot()
-	return append([]mb.Capability(nil), s.caps...)
-}
+func (p *Provider) Capabilities() []mb.Capability { return p.s.caps }
 
 func (p *Provider) ValidateRequest(_ context.Context, r *mb.PaymentRequest) error {
-	s := p.snapshot()
+	s := p.s
 	if r.PaymentMethod != mb.PaymentMethodMomo {
 		return fmt.Errorf("airtel: only mobile money is supported")
 	}
@@ -132,7 +124,7 @@ func (p *Provider) publicKey(ctx context.Context, tok string, s state) (*rsa.Pub
 		if err := httpx.JSON(ctx, p.client, http.MethodGet, s.baseURL+"/v1/rsa/encryption-keys", headers(tok, s), nil, &out); err != nil {
 			return nil, fmt.Errorf("airtel encryption key: %w", err)
 		}
-		raw = configx.First(out.Key, out.Data.Key)
+		raw = mb.First(out.Key, out.Data.Key)
 	}
 	k, err := airtelcrypto.PublicKey(raw)
 	if err != nil {
@@ -191,7 +183,7 @@ func amount(r mb.PaymentRequest) (float64, error) {
 }
 
 func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
-	s := p.snapshot()
+	s := p.s
 	tok, err := p.accessToken(ctx, s)
 	if err != nil {
 		return nil, err
@@ -200,18 +192,18 @@ func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.Provid
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{"reference": configx.First(r.Reference, r.TransactionID), "subscriber": map[string]string{"country": s.country, "currency": s.currency, "msisdn": r.Account}, "transaction": map[string]any{"amount": a, "country": s.country, "currency": s.currency, "id": r.TransactionID}}
+	body := map[string]any{"reference": mb.First(r.Reference, r.TransactionID), "subscriber": map[string]string{"country": s.country, "currency": s.currency, "msisdn": r.Account}, "transaction": map[string]any{"amount": a, "country": s.country, "currency": s.currency, "id": r.TransactionID}}
 	var out envelope
 	if err = p.post(ctx, s.baseURL+"/merchant/v2/payments/", tok, s, body, &out); err != nil {
 		return nil, err
 	}
-	ref := configx.First(out.Data.Transaction.ID, r.TransactionID)
-	msg := configx.First(out.Data.Transaction.Message, out.Status.Message, "Payment accepted")
+	ref := mb.First(out.Data.Transaction.ID, r.TransactionID)
+	msg := mb.First(out.Data.Transaction.Message, out.Status.Message, "Payment accepted")
 	return &mb.ProviderPaymentResponse{ProviderReference: ref, Status: airtelStatus(out.Data.Transaction.Status), Message: msg, Raw: httpx.Map(out)}, nil
 }
 
 func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
-	s := p.snapshot()
+	s := p.s
 	if s.pin == "" && s.encryptedPIN == "" {
 		return nil, fmt.Errorf("airtel: disbursement is not configured")
 	}
@@ -234,18 +226,18 @@ func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.Provi
 			return nil, err
 		}
 	}
-	body := map[string]any{"payee": map[string]string{"msisdn": r.Account, "currency": s.currency}, "reference": configx.First(r.Reference, r.TransactionID), "pin": pin, "transaction": map[string]any{"amount": a, "currency": s.currency, "id": r.TransactionID, "type": "B2C"}}
+	body := map[string]any{"payee": map[string]string{"msisdn": r.Account, "currency": s.currency}, "reference": mb.First(r.Reference, r.TransactionID), "pin": pin, "transaction": map[string]any{"amount": a, "currency": s.currency, "id": r.TransactionID, "type": "B2C"}}
 	var out envelope
 	if err = p.post(ctx, s.baseURL+"/standard/v1/disbursements/", tok, s, body, &out); err != nil {
 		return nil, err
 	}
-	ref := configx.First(out.Data.Transaction.ID, r.TransactionID)
-	msg := configx.First(out.Data.Transaction.Message, out.Status.Message, "Disbursement accepted")
+	ref := mb.First(out.Data.Transaction.ID, r.TransactionID)
+	msg := mb.First(out.Data.Transaction.Message, out.Status.Message, "Disbursement accepted")
 	return &mb.ProviderPaymentResponse{ProviderReference: ref, Status: airtelStatus(out.Data.Transaction.Status), Message: msg, Raw: httpx.Map(out)}, nil
 }
 
 func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.ProviderTransactionStatus, error) {
-	s := p.snapshot()
+	s := p.s
 	tok, err := p.accessToken(ctx, s)
 	if err != nil {
 		return nil, err
@@ -263,31 +255,30 @@ func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.Pro
 			continue
 		}
 		t := out.Data.Transaction
-		return &mb.ProviderTransactionStatus{ProviderReference: configx.First(t.ID, ref), Status: airtelStatus(t.Status), Message: configx.First(t.Message, out.Status.Message, t.Status)}, nil
+		return &mb.ProviderTransactionStatus{ProviderReference: mb.First(t.ID, ref), Status: airtelStatus(t.Status), Message: mb.First(t.Message, out.Status.Message, t.Status)}, nil
 	}
 	return nil, fmt.Errorf("airtel: transaction query failed: %s", strings.Join(errs, "; "))
 }
 func (p *Provider) HealthCheck(ctx context.Context) error {
-	s := p.snapshot()
+	s := p.s
 	_, err := p.accessToken(ctx, s)
 	return err
 }
 func airtelStatus(v string) string {
 	switch strings.ToUpper(strings.TrimSpace(v)) {
-	case "TS", "SUCCESS", "SUCCESSFUL":
+	case "TS":
 		return mb.TxSucceeded
 	case "DP", "PENDING":
 		return mb.TxPending
-	case "TIP", "PROCESSING":
+	case "TIP":
 		return mb.TxProcessing
-	case "TF", "FAILED":
+	case "TF":
 		return mb.TxFailed
 	default:
 		return mb.PaymentStatus(v)
 	}
 }
 
-var _ mb.PaymentProvider = (*Provider)(nil)
 var _ mb.Collector = (*Provider)(nil)
 var _ mb.Disburser = (*Provider)(nil)
 var _ mb.TransactionQuerier = (*Provider)(nil)

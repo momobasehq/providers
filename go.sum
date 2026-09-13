@@ -1,3 +1,5 @@
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/momobasehq/momobase v0.3.0 h1:wW+Mi2i3hNGdbdb7ny2w8acBYPcTuLOyhViNp7k2Yq4=
 github.com/momobasehq/momobase v0.3.0/go.mod h1:lEGWsUha+D+hvLkPhc1EZU1qW4kUcMeuaJGfM9llHE4=
 golang.org/x/text v0.40.0 h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=

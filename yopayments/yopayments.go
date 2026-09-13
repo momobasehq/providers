@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	mb "github.com/momobasehq/momobase/providers"
 	"github.com/momobasehq/providers/internal/configx"
@@ -25,8 +24,10 @@ type state struct {
 	endpoint, username, password string
 	caps                         []mb.Capability
 }
+
+// Provider is initialized once by the Momobase runtime before first use;
+// Init is not safe to call concurrently with the payment methods.
 type Provider struct {
-	mu     sync.RWMutex
 	s      state
 	client *http.Client
 }
@@ -36,7 +37,7 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 	if err := configx.Require(c, "username", "password"); err != nil {
 		return fmt.Errorf("yopayments: %w", err)
 	}
-	endpoint := configx.String(c, "base_url")
+	endpoint := mb.ConfigString(c, "base_url")
 	if endpoint == "" {
 		if e := configx.Environment(c); e == "production" || e == "live" {
 			endpoint = liveURL
@@ -44,17 +45,11 @@ func (p *Provider) Init(_ context.Context, c mb.ProviderConfig) error {
 			endpoint = sandboxURL
 		}
 	}
-	s := state{endpoint: endpoint, username: configx.String(c, "username"), password: configx.String(c, "password"), caps: []mb.Capability{{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo}, {ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo}}}
-	p.mu.Lock()
+	s := state{endpoint: endpoint, username: mb.ConfigString(c, "username"), password: mb.ConfigString(c, "password"), caps: []mb.Capability{{ServiceType: mb.ServiceCollection, PaymentMethod: mb.PaymentMethodMomo}, {ServiceType: mb.ServiceDisbursement, PaymentMethod: mb.PaymentMethodMomo}}}
 	p.s = s
-	p.mu.Unlock()
 	return nil
 }
-func (p *Provider) snapshot() state { p.mu.RLock(); defer p.mu.RUnlock(); return p.s }
-func (p *Provider) Capabilities() []mb.Capability {
-	s := p.snapshot()
-	return append([]mb.Capability(nil), s.caps...)
-}
+func (p *Provider) Capabilities() []mb.Capability { return p.s.caps }
 func (p *Provider) ValidateRequest(_ context.Context, r *mb.PaymentRequest) error {
 	if r.PaymentMethod != mb.PaymentMethodMomo {
 		return fmt.Errorf("yopayments: only mobile money is supported")
@@ -123,21 +118,21 @@ func baseRequest(s state, method string) yoRequest {
 	return yoRequest{APIUsername: s.username, APIPassword: s.password, Method: method}
 }
 func (p *Provider) pay(ctx context.Context, r mb.PaymentRequest, method string) (*mb.ProviderPaymentResponse, error) {
-	s := p.snapshot()
+	s := p.s
 	q := baseRequest(s, method)
 	q.NonBlocking = "TRUE"
 	q.Account = r.Account
 	q.Amount = mb.FormatAmountMinor(r.Amount, r.Currency)
-	q.Narrative = configx.First(r.Description, r.Reference, "Momobase payment")
-	q.ExternalReference = configx.First(r.TransactionID, r.Reference)
+	q.Narrative = mb.First(r.Description, r.Reference, "Momobase payment")
+	q.ExternalReference = mb.First(r.TransactionID, r.Reference)
 	out, err := p.call(ctx, s, q)
 	if err != nil {
 		return nil, err
 	}
 	if out.TransactionReference == "" && strings.EqualFold(out.Status, "ERROR") {
-		return nil, fmt.Errorf("yopayments: %s", configx.First(out.ErrorMessage, out.StatusMessage, out.Status))
+		return nil, fmt.Errorf("yopayments: %s", mb.First(out.ErrorMessage, out.StatusMessage, out.Status))
 	}
-	return &mb.ProviderPaymentResponse{ProviderReference: out.TransactionReference, Status: yoStatus(out.TransactionStatus, out.Status), Message: configx.First(out.ErrorMessage, out.StatusMessage, out.TransactionStatus, out.Status), Raw: rawMap(out)}, nil
+	return &mb.ProviderPaymentResponse{ProviderReference: out.TransactionReference, Status: yoStatus(out.TransactionStatus, out.Status), Message: mb.First(out.ErrorMessage, out.StatusMessage, out.TransactionStatus, out.Status), Raw: rawMap(out)}, nil
 }
 func (p *Provider) Collect(ctx context.Context, r mb.PaymentRequest) (*mb.ProviderPaymentResponse, error) {
 	return p.pay(ctx, r, "acdepositfunds")
@@ -146,28 +141,26 @@ func (p *Provider) Disburse(ctx context.Context, r mb.PaymentRequest) (*mb.Provi
 	return p.pay(ctx, r, "acwithdrawfunds")
 }
 func (p *Provider) QueryTransaction(ctx context.Context, ref, _ string) (*mb.ProviderTransactionStatus, error) {
-	s := p.snapshot()
+	s := p.s
 	q := baseRequest(s, "actransactioncheckstatus")
 	q.TransactionReference = ref
 	out, err := p.call(ctx, s, q)
 	if err != nil {
 		return nil, err
 	}
-	return &mb.ProviderTransactionStatus{ProviderReference: configx.First(out.TransactionReference, ref), Status: yoStatus(out.TransactionStatus, out.Status), Message: configx.First(out.ErrorMessage, out.StatusMessage, out.TransactionStatus, out.Status)}, nil
+	return &mb.ProviderTransactionStatus{ProviderReference: mb.First(out.TransactionReference, ref), Status: yoStatus(out.TransactionStatus, out.Status), Message: mb.First(out.ErrorMessage, out.StatusMessage, out.TransactionStatus, out.Status)}, nil
 }
 func yoStatus(tx, top string) string {
-	v := strings.ToUpper(configx.First(tx, top))
+	v := strings.ToUpper(mb.First(tx, top))
 	switch v {
-	case "SUCCEEDED", "SUCCESS", "SUCCESSFUL", "OK":
+	case "OK":
 		return mb.TxSucceeded
 	case "PENDING":
 		return mb.TxPending
-	case "INDETERMINATE", "PROCESSING":
+	case "INDETERMINATE":
 		return mb.TxProcessing
-	case "FAILED", "FAIL", "ERROR":
+	case "FAIL", "ERROR":
 		return mb.TxFailed
-	case "CANCELLED", "CANCELED":
-		return mb.TxCancelled
 	default:
 		return mb.PaymentStatus(v)
 	}
@@ -176,7 +169,6 @@ func rawMap(r yoResponse) map[string]any {
 	return map[string]any{"status": r.Status, "status_code": r.StatusCode, "status_message": r.StatusMessage, "transaction_status": r.TransactionStatus, "transaction_reference": r.TransactionReference, "mno_transaction_reference_id": r.MNOTransactionReferenceID, "issued_receipt_number": r.IssuedReceiptNumber, "error_message_code": r.ErrorMessageCode, "error_message": r.ErrorMessage, "amount": r.Amount, "currency_code": r.CurrencyCode}
 }
 
-var _ mb.PaymentProvider = (*Provider)(nil)
 var _ mb.Collector = (*Provider)(nil)
 var _ mb.Disburser = (*Provider)(nil)
 var _ mb.TransactionQuerier = (*Provider)(nil)

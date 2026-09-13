@@ -12,13 +12,12 @@ var callingCodes = map[string]string{
 }
 
 func Digits(s string) string {
-	var b strings.Builder
-	for _, r := range s {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsDigit(r) {
-			b.WriteRune(r)
+			return r
 		}
-	}
-	return b.String()
+		return -1
+	}, s)
 }
 
 func E164(account, country string) (string, error) {
