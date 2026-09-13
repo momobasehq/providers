@@ -36,7 +36,7 @@ func Do(ctx context.Context, client *http.Client, method, endpoint string, heade
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	b, err := io.ReadAll(io.LimitReader(res.Body, 2<<20))
 	if err != nil {
 		return nil, err
