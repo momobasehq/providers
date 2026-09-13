@@ -82,8 +82,8 @@ Outside sandbox, `target_environment` and `base_url` must be set explicitly so a
   "subscription_key": "your-subscription-key",
   "api_user": "00000000-0000-4000-8000-000000000000",
   "api_key": "your-api-key",
-  "target_environment": "your-target-environment",
-  "base_url": "https://your-mtn-market-host"
+  "target_environment": "sandbox",
+  "base_url": "https://sandbox.momodeveloper.mtn.com"
 }
 ```
 
@@ -97,8 +97,8 @@ Separate credentials per product:
   "disbursement_subscription_key": "your-disbursement-subscription-key",
   "disbursement_api_user": "11111111-1111-4111-8111-111111111111",
   "disbursement_api_key": "your-disbursement-api-key",
-  "target_environment": "your-target-environment",
-  "base_url": "https://your-mtn-market-host"
+  "target_environment": "sandbox",
+  "base_url": "https://sandbox.momodeveloper.mtn.com"
 }
 ```
 
