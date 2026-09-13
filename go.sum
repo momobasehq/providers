@@ -1,0 +1,4 @@
+github.com/momobasehq/momobase v0.3.0 h1:wW+Mi2i3hNGdbdb7ny2w8acBYPcTuLOyhViNp7k2Yq4=
+github.com/momobasehq/momobase v0.3.0/go.mod h1:lEGWsUha+D+hvLkPhc1EZU1qW4kUcMeuaJGfM9llHE4=
+golang.org/x/text v0.40.0 h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
+golang.org/x/text v0.40.0/go.mod h1:hpnzDAfGV753zIKo+wk3u1bVKCGPbrnF7+7LBF/UHVY=
