@@ -1,29 +1,24 @@
 # Momobase providers
 
-Provider adapters for [`github.com/momobasehq/momobase`](https://pkg.go.dev/github.com/momobasehq/momobase), following the [Momobase provider guide](https://momobase.dev/library/providers) and [provider API reference](https://momobase.dev/library/provider-api).
+Payment provider adapters for [Momobase](https://github.com/momobasehq/momobase), covering mobile money, cards, and bank rails across African markets.
 
-Each adapter lives in its own root package. Applications import only the packages they register; shared implementation details stay under `internal/`.
+Each adapter is its own package, so your application compiles only the providers it registers.
 
-## Packages
+| Package | Collections | Disbursements | Verified webhooks |
+| --- | --- | --- | --- |
+| [`mtn`](#mtn-momo) | Mobile money | Mobile money | No |
+| [`airtel`](#airtel-money) | Mobile money | Mobile money | No |
+| [`yopayments`](#yo-payments) | Mobile money | Mobile money | No |
+| [`marzpay`](#marzpay) | Mobile money, card | Mobile money | Yes |
+| [`flutterwave`](#flutterwave) | Mobile money | Mobile money | Yes |
 
-| Package | Collections | Disbursements | Verified webhooks | Notes |
-| --- | --- | --- | --- | --- |
-| `mtn` | MoMo | MoMo | No | MTN MoMo Collection + Disbursement APIs |
-| `airtel` | MoMo | MoMo* | No | Disbursement is enabled when `pin` or `encrypted_pin` is configured; optional Uganda request signing |
-| `yopayments` | MoMo | MoMo | No | Yo! Payments XML API, non-blocking operations |
-| `marzpay` | MoMo, Card | MoMo | Yes | Card collections return a hosted `redirect_url` in `Raw` |
-| `flutterwave` | MoMo | MoMo | Yes | Flutterwave v4 OAuth, mobile-money charges and direct transfers |
-
-\* Airtel collection is always exposed once credentials are valid. Disbursement requires a configured PIN.
-
-## Install only what you use
+## Install
 
 ```bash
 go get github.com/momobasehq/providers/mtn
-go get github.com/momobasehq/providers/airtel
 ```
 
-You can install/import any other provider package the same way. Go resolves the module once, but your application only compiles the packages you import.
+Install any other provider the same way — Go resolves the module once, and only the packages you import are compiled.
 
 ## Register with Momobase
 
@@ -50,126 +45,167 @@ func main() {
 }
 ```
 
-Provider account configuration is passed by Momobase to each adapter's `Init`. `environment` is supplied by Momobase and is authoritative.
-
 ## Configuration
 
-### MTN
+Each provider account's configuration is stored in Momobase and passed to the adapter when it starts. The JSON below is what goes into that configuration.
 
-Use either shared credentials or product-specific credentials.
+`environment` is supplied by Momobase and is authoritative — do not set it yourself. It selects the sandbox or live defaults for any `base_url` you leave unset.
 
-```text
-subscription_key                 shared fallback
-api_user                         shared fallback
-api_key                          shared fallback
-collection_subscription_key     optional product override
-collection_api_user             optional product override
-collection_api_key              optional product override
-disbursement_subscription_key   optional product override
-disbursement_api_user           optional product override
-disbursement_api_key            optional product override
-target_environment              defaults to sandbox only
-base_url                         defaults to MTN sandbox only
+---
+
+### MTN MoMo
+
+Collections through request-to-pay and disbursements through transfer, on the MTN MoMo Collection and Disbursement APIs. Capabilities are derived from the credentials you provide: supply a complete collection set, a complete disbursement set, or both.
+
+📖 [MTN MoMo Developer Portal](https://momodeveloper.mtn.com/)
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `subscription_key` | Yes¹ | Subscription key used when no product-specific key is set |
+| `api_user` | Yes¹ | API user ID |
+| `api_key` | Yes¹ | API key issued for the API user |
+| `collection_subscription_key` | No | Overrides `subscription_key` for collections |
+| `collection_api_user` | No | Overrides `api_user` for collections |
+| `collection_api_key` | No | Overrides `api_key` for collections |
+| `disbursement_subscription_key` | No | Overrides `subscription_key` for disbursements |
+| `disbursement_api_user` | No | Overrides `api_user` for disbursements |
+| `disbursement_api_key` | No | Overrides `api_key` for disbursements |
+| `target_environment` | Outside sandbox | Target environment for your market |
+| `base_url` | Outside sandbox | Your market's API host |
+
+¹ Either the shared credentials or the matching product-specific overrides. A product is enabled only when its subscription key, API user, and API key are all present.
+
+Outside sandbox, `target_environment` and `base_url` must be set explicitly so a live market host is never guessed.
+
+```json
+{
+  "subscription_key": "your-subscription-key",
+  "api_user": "00000000-0000-4000-8000-000000000000",
+  "api_key": "your-api-key",
+  "target_environment": "your-target-environment",
+  "base_url": "https://your-mtn-market-host"
+}
 ```
 
-At least one complete collection/disbursement credential set is required. Production intentionally requires explicit `base_url` and `target_environment` so a country-specific live endpoint is not guessed.
+Separate credentials per product:
+
+```json
+{
+  "collection_subscription_key": "your-collection-subscription-key",
+  "collection_api_user": "00000000-0000-4000-8000-000000000000",
+  "collection_api_key": "your-collection-api-key",
+  "disbursement_subscription_key": "your-disbursement-subscription-key",
+  "disbursement_api_user": "11111111-1111-4111-8111-111111111111",
+  "disbursement_api_key": "your-disbursement-api-key",
+  "target_environment": "your-target-environment",
+  "base_url": "https://your-mtn-market-host"
+}
+```
+
+---
 
 ### Airtel Money
 
-```text
-client_id          required
-client_secret      required
-country            required, ISO alpha-2 (for example UG)
-currency           required (for example UGX)
-pin                enables disbursement; encrypted with Airtel RSA key
-encrypted_pin      alternative to pin when already encrypted
-sign_requests      optional bool; enables x-signature/x-key request signing
-public_key         optional PEM/base64 RSA public key; otherwise fetched when needed
-base_url            optional; defaults to openapiuat.airtel.africa or openapi.airtel.africa
+Airtel Money collections and disbursements across Airtel Africa markets. One account serves a single country and currency. Disbursement is enabled only when a PIN is configured; collection is always available.
+
+📖 [Airtel Africa Developer Portal](https://developers.airtel.africa/)
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `client_id` | Yes | OAuth client ID |
+| `client_secret` | Yes | OAuth client secret |
+| `country` | Yes | ISO 3166-1 alpha-2 country code, for example `UG` |
+| `currency` | Yes | ISO 4217 currency code, for example `UGX` |
+| `pin` | No | Enables disbursement; encrypted with Airtel's RSA key before use |
+| `encrypted_pin` | No | Already-encrypted alternative to `pin` |
+| `public_key` | No | PEM or base64 RSA public key; fetched from Airtel when omitted |
+| `sign_requests` | No | Set `true` for deployments that require encrypted request signing |
+| `base_url` | No | Market-specific host; defaults by environment |
+
+Requests are rejected when their country or currency does not match the account's.
+
+```json
+{
+  "client_id": "your-client-id",
+  "client_secret": "your-client-secret",
+  "country": "UG",
+  "currency": "UGX",
+  "pin": "1234",
+  "sign_requests": false
+}
 ```
 
-`sign_requests` exists for Airtel deployments that require encrypted request signing. Use `base_url` when your Airtel market/account is provisioned on a market-specific hostname.
+---
 
 ### Yo! Payments
 
-```text
-username    required API username
-password    required API password
-base_url    optional; defaults by environment
+Mobile money collections and withdrawals on the Yo! Payments API. Operations are submitted as non-blocking requests and resolved by querying the transaction.
+
+📖 [Yo! Payments](https://paymentsweb.yo.co.ug/index.php)
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `username` | Yes | API username |
+| `password` | Yes | API password |
+| `base_url` | No | API endpoint; defaults by environment |
+
+```json
+{
+  "username": "your-api-username",
+  "password": "your-api-password"
+}
 ```
 
-Sandbox: `https://sandbox.yo.co.ug/services/yopaymentsdev/task.php`  
-Live: `https://paymentsapi1.yo.co.ug/ybs/task.php`
+---
 
 ### MarzPay
 
-```text
-api_key                  required
-api_secret               required
-callback_url             optional
-webhook_signing_secret   required when callback_url is configured
-base_url                  optional; defaults to https://wallet.wearemarz.com/api/v1
+Mobile money and card collections plus mobile money payouts. The mobile network is resolved by MarzPay from the phone number and country. Card collections return a hosted checkout `redirect_url` in the response's `Raw` map — send the payer there to complete payment.
+
+📖 [MarzPay API documentation](https://wallet.wearemarz.com/documentation/api)
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `api_key` | Yes | API key |
+| `api_secret` | Yes | API secret |
+| `callback_url` | No | Webhook destination for transaction updates |
+| `webhook_signing_secret` | With `callback_url` | Secret used to verify webhook signatures |
+| `base_url` | No | API endpoint; defaults to MarzPay's live API |
+
+Configuring `callback_url` without `webhook_signing_secret` is rejected at startup, so callbacks are never accepted unverified.
+
+```json
+{
+  "api_key": "your-api-key",
+  "api_secret": "your-api-secret",
+  "callback_url": "https://your-app.example.com/webhooks/marzpay",
+  "webhook_signing_secret": "your-webhook-signing-secret"
+}
 ```
 
-Mobile-money providers are detected by MarzPay from the E.164 phone number and `country`. Card collection uses `method=card` and exposes MarzPay's `redirect_url` through the response `Raw` map.
+---
 
 ### Flutterwave
 
-```text
-client_id         required v4 OAuth client ID
-client_secret     required v4 OAuth client secret
-webhook_secret    required dashboard webhook secret hash
-redirect_url      optional collection redirect URL
-callback_url      optional per-transfer callback URL
-base_url           optional; defaults by environment
+Mobile money collections and payouts on Flutterwave v4. Collections require the payer's `Email`, because v4 creates a customer before a mobile money payment method. `Scheme` must name the mobile network, for example `MTN` or `AIRTEL`.
+
+📖 [Flutterwave mobile money documentation](https://developer.flutterwave.com/docs/mobile-money)
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `client_id` | Yes | OAuth client ID |
+| `client_secret` | Yes | OAuth client secret |
+| `webhook_secret` | Yes | Webhook secret hash from your dashboard |
+| `redirect_url` | No | Where payers return after a collection |
+| `callback_url` | No | Per-transfer callback destination |
+| `base_url` | No | API endpoint; defaults by environment |
+
+```json
+{
+  "client_id": "your-client-id",
+  "client_secret": "your-client-secret",
+  "webhook_secret": "your-webhook-secret-hash",
+  "redirect_url": "https://your-app.example.com/payments/return",
+  "callback_url": "https://your-app.example.com/webhooks/flutterwave"
+}
 ```
-
-Sandbox: `https://developersandbox-api.flutterwave.com`  
-Live: `https://f4bexperience.flutterwave.com`
-
-For mobile money, Momobase `Scheme` must name the network (for example `MTN` or `AIRTEL`). Collections also require `Email`, because Flutterwave v4 requires a customer object before a mobile-money payment method can be created.
-
-## Webhook policy
-
-A Momobase `WebhookVerifier` is implemented only when the upstream exposes cryptographic verification:
-
-- MarzPay: HMAC-SHA256 over `{timestamp}.{raw_body}` using `X-MarzPay-Timestamp` and `X-MarzPay-Signature`.
-- Flutterwave: HMAC-SHA256 of the raw body, base64 encoded, compared to `flutterwave-signature`.
-
-MTN, Airtel, and Yo! Payments are deliberately polling/reconciliation-first here rather than accepting an unauthenticated callback as authoritative.
-
-## Shared internals
-
-```text
-internal/airtelcrypto   Airtel AES/RSA request signing and PIN encryption
-internal/configx        ProviderConfig helpers
-internal/httpx          Context-bound HTTP, JSON/form/multipart helpers and redacted errors
-internal/msisdn         E.164/local phone normalization for supported African markets
-internal/token          Concurrent OAuth/access-token cache
-internal/uuidx          UUID v4 generation
-```
-
-## Provider API invariants
-
-The adapters follow Momobase v0.3.0's rules: each declared payment capability has its operation interface and `TransactionQuerier`; mutable configuration/token state is concurrency-safe; `RequestValidator` only rewrites `Account`/`Scheme`; amounts remain integer minor units inside Momobase; HTTP requests honor caller context; provider statuses are normalized to Momobase transaction states.
-
-## Upstream references
-
-- Momobase: https://momobase.dev/library/providers and https://momobase.dev/library/provider-api
-- MTN MoMo: https://momodeveloper.mtn.com/
-- Airtel Africa Developer Portal: https://developers.airtel.africa/
-- Yo! Payments: https://paymentsweb.yo.co.ug/index.php and its public sandbox/developer material
-- MarzPay: https://wallet.wearemarz.com/documentation/api, `/documentation/collections`, `/documentation/send-money`, `/documentation/webhooks`
-- Flutterwave v4: https://developer.flutterwave.com/docs/mobile-money, `/docs/mobile-money-1`, `/docs/authentication`, `/docs/webhooks`
-
-## Verification before release
-
-Run against the real dependency and sandboxes before tagging:
-
-```bash
-go mod tidy
-go test -race ./...
-go vet ./...
-```
-
-Then create sandbox provider accounts in Momobase and exercise collection/disbursement, reconciliation, duplicate requests, timeout/cancellation, and signed webhook paths before enabling live money movement.
