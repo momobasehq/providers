@@ -45,6 +45,21 @@ func main() {
 }
 ```
 
+> [!IMPORTANT]
+> The name a provider is registered under — `"mtn"` above — selects which adapter a
+> provider account uses. It is **not** the webhook path.
+>
+> Momobase receives webhooks at `POST /webhooks/{providerAccountID}`, using the ID of
+> the provider account you create in Momobase:
+>
+> ```
+> https://momobase.local/webhooks/pacc_5f8d2c1e-9b3a-4d7e-8c6f-1a2b3c4d5e6f
+> ```
+>
+> Incoming requests must also carry an `X-Webhook-Secret` header matching that account's
+> `webhook_secret`, on top of the provider's own signature verification. Configure this
+> exact URL at the provider — a guessed path such as `/webhooks/mtn` will not resolve.
+
 ## Configuration
 
 Each provider account's configuration is stored in Momobase and passed to the adapter when it starts. The JSON below is what goes into that configuration.
@@ -58,6 +73,17 @@ Each provider account's configuration is stored in Momobase and passed to the ad
 Collections through request-to-pay and disbursements through transfer, on the MTN MoMo Collection and Disbursement APIs. Capabilities are derived from the credentials you provide: supply a complete collection set, a complete disbursement set, or both.
 
 📖 [MTN MoMo Developer Portal](https://momodeveloper.mtn.com/)
+
+```go
+import (
+    "github.com/momobasehq/momobase"
+    "github.com/momobasehq/providers/mtn"
+)
+
+instance, err := momobase.New(
+    momobase.WithProvider("mtn", mtn.New),
+)
+```
 
 | Key | Required | Description |
 | --- | --- | --- |
@@ -110,6 +136,17 @@ Airtel Money collections and disbursements across Airtel Africa markets. One acc
 
 📖 [Airtel Africa Developer Portal](https://developers.airtel.africa/)
 
+```go
+import (
+    "github.com/momobasehq/momobase"
+    "github.com/momobasehq/providers/airtel"
+)
+
+instance, err := momobase.New(
+    momobase.WithProvider("airtel", airtel.New),
+)
+```
+
 | Key | Required | Description |
 | --- | --- | --- |
 | `client_id` | Yes | OAuth client ID |
@@ -143,6 +180,17 @@ Mobile money collections and withdrawals on the Yo! Payments API. Operations are
 
 📖 [Yo! Payments](https://paymentsweb.yo.co.ug/index.php)
 
+```go
+import (
+    "github.com/momobasehq/momobase"
+    "github.com/momobasehq/providers/yopayments"
+)
+
+instance, err := momobase.New(
+    momobase.WithProvider("yopayments", yopayments.New),
+)
+```
+
 | Key | Required | Description |
 | --- | --- | --- |
 | `username` | Yes | API username |
@@ -164,6 +212,17 @@ Mobile money collections and withdrawals on the Yo! Payments API. Operations are
 Mobile money and card collections plus mobile money payouts. The mobile network is resolved by MarzPay from the phone number and country. Card collections return a hosted checkout `redirect_url` in the response's `Raw` map — send the payer there to complete payment.
 
 📖 [MarzPay API documentation](https://wallet.wearemarz.com/documentation/api)
+
+```go
+import (
+    "github.com/momobasehq/momobase"
+    "github.com/momobasehq/providers/marzpay"
+)
+
+instance, err := momobase.New(
+    momobase.WithProvider("marzpay", marzpay.New),
+)
+```
 
 | Key | Required | Description |
 | --- | --- | --- |
@@ -191,6 +250,17 @@ Configuring `callback_url` without `webhook_signing_secret` is rejected at start
 Mobile money collections and payouts on Flutterwave v4. Collections require the payer's `Email`, because v4 creates a customer before a mobile money payment method. `Scheme` must name the mobile network, for example `MTN` or `AIRTEL`.
 
 📖 [Flutterwave mobile money documentation](https://developer.flutterwave.com/docs/mobile-money)
+
+```go
+import (
+    "github.com/momobasehq/momobase"
+    "github.com/momobasehq/providers/flutterwave"
+)
+
+instance, err := momobase.New(
+    momobase.WithProvider("flutterwave", flutterwave.New),
+)
+```
 
 | Key | Required | Description |
 | --- | --- | --- |
