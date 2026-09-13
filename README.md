@@ -80,7 +80,7 @@ Outside sandbox, `target_environment` and `base_url` must be set explicitly so a
 ```json
 {
   "subscription_key": "your-subscription-key",
-  "api_user": "00000000-0000-4000-8000-000000000000",
+  "api_user": "your-api-user",
   "api_key": "your-api-key",
   "target_environment": "sandbox",
   "base_url": "https://sandbox.momodeveloper.mtn.com"
@@ -92,10 +92,10 @@ Separate credentials per product:
 ```json
 {
   "collection_subscription_key": "your-collection-subscription-key",
-  "collection_api_user": "00000000-0000-4000-8000-000000000000",
+  "collection_api_user": "your-collection-api-user",
   "collection_api_key": "your-collection-api-key",
   "disbursement_subscription_key": "your-disbursement-subscription-key",
-  "disbursement_api_user": "11111111-1111-4111-8111-111111111111",
+  "disbursement_api_user": "your-disbursement-api-user",
   "disbursement_api_key": "your-disbursement-api-key",
   "target_environment": "sandbox",
   "base_url": "https://sandbox.momodeveloper.mtn.com"
@@ -152,7 +152,8 @@ Mobile money collections and withdrawals on the Yo! Payments API. Operations are
 ```json
 {
   "username": "your-api-username",
-  "password": "your-api-password"
+  "password": "your-api-password",
+  "base_url": "yo-payments-base-url"
 }
 ```
 
@@ -178,7 +179,7 @@ Configuring `callback_url` without `webhook_signing_secret` is rejected at start
 {
   "api_key": "your-api-key",
   "api_secret": "your-api-secret",
-  "callback_url": "https://your-app.example.com/webhooks/marzpay",
+  "callback_url": "https://momobase.local/webhooks/marzpay",
   "webhook_signing_secret": "your-webhook-signing-secret"
 }
 ```
@@ -205,7 +206,6 @@ Mobile money collections and payouts on Flutterwave v4. Collections require the 
   "client_id": "your-client-id",
   "client_secret": "your-client-secret",
   "webhook_secret": "your-webhook-secret-hash",
-  "redirect_url": "https://your-app.example.com/payments/return",
-  "callback_url": "https://your-app.example.com/webhooks/flutterwave"
+  "callback_url": "https://momobase.local/webhooks/flutterwave"
 }
 ```
