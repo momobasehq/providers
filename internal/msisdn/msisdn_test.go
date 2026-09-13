@@ -8,8 +8,7 @@ func TestDigits(t *testing.T) {
 		"(0700) 123.456":  "0700123456",
 		"abc":             "",
 		"":                "",
-		// unicode.IsDigit accepts non-ASCII digits, so they survive verbatim.
-		"٣٤٥": "٣٤٥",
+		"٣٤٥":             "",
 	} {
 		if got := Digits(in); got != want {
 			t.Errorf("Digits(%q) = %q, want %q", in, got, want)

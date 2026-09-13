@@ -3,7 +3,6 @@ package msisdn
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 var callingCodes = map[string]string{
@@ -13,7 +12,7 @@ var callingCodes = map[string]string{
 
 func Digits(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsDigit(r) {
+		if r >= '0' && r <= '9' {
 			return r
 		}
 		return -1
