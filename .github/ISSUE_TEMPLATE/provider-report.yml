@@ -1,0 +1,121 @@
+name: Provider report
+description: Report what happened when you tested a provider with your own account
+title: "[provider]: "
+labels: ["provider-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Please read [TESTING.md](../blob/main/TESTING.md) first — especially
+        the note that **MarzPay has no sandbox** and always calls the live API.
+
+        **Never paste credentials here.** No API keys, secrets, passwords, PINs, or webhook
+        secrets. Error messages are safe; Momobase redacts secrets from upstream responses.
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - mtn
+        - airtel
+        - yopayments
+        - marzpay
+        - flutterwave
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - Collection
+        - Disbursement
+        - Transaction query
+        - Webhook
+        - Initialization / configuration
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Sandbox
+        - Live
+    validations:
+      required: true
+
+  - type: input
+    id: country
+    attributes:
+      label: Country
+      description: ISO 3166-1 alpha-2 code, for example UG
+      placeholder: UG
+    validations:
+      required: true
+
+  - type: input
+    id: currency
+    attributes:
+      label: Currency
+      description: ISO 4217 code, for example UGX
+      placeholder: UGX
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+      description: Include the error message or response if there was one. Redacted output is fine to paste.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: status
+    attributes:
+      label: Momobase transaction status
+      description: The status Momobase ended up with — succeeded, pending, processing, failed, cancelled, expired, or unknown
+      placeholder: unknown
+    validations:
+      required: false
+
+  - type: input
+    id: provider_status
+    attributes:
+      label: Raw provider status
+      description: If Momobase reported `unknown`, the provider's own status string is what we need to map it
+      placeholder: TIP
+    validations:
+      required: false
+
+  - type: textarea
+    id: account_format
+    attributes:
+      label: Phone number format
+      description: |
+        Only if the number was mishandled. The format you entered and the format the provider
+        reported receiving. Mask the last four digits, for example +2567001234##.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: This report contains no API keys, secrets, passwords, PINs, or webhook secrets
+          required: true
+        - label: I tested with an account I control
+          required: true

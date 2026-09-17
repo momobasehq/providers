@@ -69,3 +69,7 @@ Each provider documents its own configuration keys, an example configuration, an
 - [`yopayments`](yopayments/README.md) — Yo! Payments
 - [`marzpay`](marzpay/README.md) — MarzPay
 - [`flutterwave`](flutterwave/README.md) — Flutterwave
+
+## Testing
+
+Most of these adapters have never run against a real merchant account. If you hold one, [TESTING.md](TESTING.md) explains what needs testing and how to report what you find.
