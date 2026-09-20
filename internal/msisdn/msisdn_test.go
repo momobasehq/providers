@@ -86,13 +86,8 @@ func TestCountryCode(t *testing.T) {
 	}
 }
 
-// TestKnownLimitations pins the gaps in this package rather than leaving them
-// undocumented. Normalization here is a convenience: the provider owns the
-// numbering plan for its market and performs the authoritative validation, so
-// these inputs are forwarded and rejected upstream instead of locally.
-//
-// If these assertions ever start failing, the behaviour was tightened on
-// purpose and the expectations below should be updated to match.
+// TestKnownLimitations pins the gaps rather than leaving them undocumented: the provider
+// owns its market's numbering plan, so these inputs are forwarded and rejected upstream.
 func TestKnownLimitations(t *testing.T) {
 	// A country outside callingCodes yields a non-E.164 string, with no error.
 	if got, err := E164("0790123456", "NE"); got != "0790123456" || err != nil {
